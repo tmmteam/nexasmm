@@ -21,9 +21,9 @@ def update_user(uid, data):
 app = Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # User states
-user_state = {}          # tracks user's current step (e.g., "add_amount", "awaiting_ss")
-pending_payments = {}    # uid -> {amount, admin_msgs: {admin_id: msg_id}, handled, handled_by, user_name}
-admin_state = {}         # admin_id -> {action: "accept_amount", user_id: uid}
+user_state = {}          # tracks user's current step
+pending_payments = {}    # uid -> {amount, admin_msgs, handled, handled_by, user_name}
+admin_state = {}         # admin_id -> {action: "accept_amount", user_id}
 
 # ---------------- START (force join) ----------------
 @app.on_message(filters.command("start"))
@@ -31,7 +31,6 @@ async def start(client, message):
     uid = message.from_user.id
     args = message.text.split()
 
-    # Create user if new
     if not get_user(uid):
         update_user(uid, {
             "bot_balance": 0,
@@ -40,7 +39,6 @@ async def start(client, message):
             "banned": False
         })
 
-        # Referral bonus
         if len(args) > 1 and args[1].startswith("ref_"):
             ref_id = int(args[1].split("_")[1])
             if ref_id != uid:
@@ -51,7 +49,6 @@ async def start(client, message):
                     await app.send_message(ref_id, "🎉 New referral! +₹0.25 in your bot balance.")
                     await message.reply(f"✅ You were referred by user {ref_id}")
 
-    # Join buttons
     join_buttons = [
         [InlineKeyboardButton("📢 Join Channel 1", url=f"https://t.me/{CHANNELS[0][1:]}")],
         [InlineKeyboardButton("📢 Join Channel 2", url=f"https://t.me/{CHANNELS[1][1:]}")],
@@ -107,8 +104,7 @@ async def earn_info(client, cb):
 @app.on_callback_query(filters.regex("bal"))
 async def balance(client, cb):
     user = get_user(cb.from_user.id)
-    text = f"🤖 **Bot Balance:** ₹{user['bot_balance']}\n🌐 **Web Balance:** ₹{user['web_balance']}"
-    await cb.message.reply(text)
+    await cb.message.reply(f"🤖 **Bot Balance:** ₹{user['bot_balance']}\n🌐 **Web Balance:** ₹{user['web_balance']}")
 
 @app.on_callback_query(filters.regex("wd"))
 async def withdraw_start(client, cb):
@@ -137,7 +133,6 @@ async def pay_done(client, cb):
         return await cb.answer("⛔ This is not for you.", show_alert=True)
 
     user_state[uid] = "awaiting_ss"
-    # Delete QR message
     await cb.message.delete()
     await app.send_message(uid, "📸 Please send a screenshot of your successful payment.")
 
@@ -156,7 +151,7 @@ async def pay_cancel(client, cb):
 async def handle_screenshot(client, msg):
     uid = msg.from_user.id
     if user_state.get(uid) != "awaiting_ss":
-        return  # ignore unsolicited photos
+        return
 
     payment = pending_payments.pop(uid, None)
     if not payment:
@@ -165,7 +160,6 @@ async def handle_screenshot(client, msg):
         return
 
     amount = payment["amount"]
-    # Get user's name
     try:
         user_info = await app.get_users(uid)
         name = user_info.first_name or f"User{uid}"
@@ -193,7 +187,6 @@ async def handle_screenshot(client, msg):
         except Exception as e:
             print(f"Failed to send to admin {admin_id}: {e}")
 
-    # Store back with admin message references
     pending_payments[uid] = {
         "amount": amount,
         "admin_msgs": admin_msg_ids,
@@ -218,11 +211,9 @@ async def admin_accept(client, cb):
     if payment["handled"]:
         return await cb.answer("⚠️ Already handled by another admin.", show_alert=True)
 
-    # Mark as handled
     payment["handled"] = True
     payment["handled_by"] = cb.from_user.id
 
-    # Ask this admin for exact amount
     admin_state[cb.from_user.id] = {"action": "accept_amount", "user_id": uid}
     await cb.answer("Please enter the amount the user paid.", show_alert=True)
     await app.send_message(cb.from_user.id, f"✍️ Enter the exact amount paid by user {uid}:")
@@ -243,7 +234,6 @@ async def admin_reject(client, cb):
     payment["handled_by"] = cb.from_user.id
     payment["status"] = "rejected"
 
-    # Edit all admin messages to show rejection
     for admin_id, msg_id in payment.get("admin_msgs", {}).items():
         try:
             await app.edit_message_caption(
@@ -254,7 +244,6 @@ async def admin_reject(client, cb):
         except:
             pass
 
-    # Notify user
     await app.send_message(uid, "❌ Your payment has been rejected. Please try again.")
     pending_payments.pop(uid, None)
     await cb.answer("Rejected!")
@@ -265,7 +254,7 @@ async def admin_amount_input(client, msg):
     admin_id = msg.from_user.id
     state = admin_state.get(admin_id)
     if not state or state["action"] != "accept_amount":
-        return  # not in this flow
+        return
 
     uid = state["user_id"]
     payment = pending_payments.get(uid)
@@ -278,11 +267,11 @@ async def admin_amount_input(client, msg):
     except:
         return await msg.reply("❌ Invalid amount. Please enter a number.")
 
-    # Update user's web balance
+    # Update web balance
     user = get_user(uid)
     update_user(uid, {"web_balance": user["web_balance"] + amt})
 
-    # Edit all admin DMs
+    # Edit admin DMs
     for admin_id_iter, msg_id_iter in payment.get("admin_msgs", {}).items():
         try:
             await app.edit_message_caption(
@@ -294,7 +283,7 @@ async def admin_amount_input(client, msg):
         except:
             pass
 
-    # Send final log to payment channel
+    # Log to payment channel
     try:
         await app.send_message(
             PAYMENT_CHANNEL,
@@ -326,16 +315,14 @@ async def text_handler(client, msg):
         except:
             return await msg.reply("❌ Please enter a valid number.")
 
-        # Generate QR code
+        # Generate QR code with EXACT amount user entered
         upi_string = f"upi://pay?pa={UPI_ID}&pn={UPI_NAME}&am={amt}&cu=INR"
         qr = qrcode.make(upi_string)
         file_path = f"qr_{uid}.png"
         qr.save(file_path)
 
-        # Store amount for later
         pending_payments[uid] = {"amount": amt, "admin_msgs": {}, "handled": False, "user_name": ""}
 
-        # Done/Cancel buttons
         buttons = InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Done", callback_data=f"pay_done_{uid}"),
              InlineKeyboardButton("❌ Cancel", callback_data=f"pay_cancel_{uid}")]
@@ -362,7 +349,6 @@ async def text_handler(client, msg):
         if user["bot_balance"] < amt:
             return await msg.reply("❌ Insufficient bot balance.")
 
-        # Send withdrawal request to payment channel
         await app.send_message(
             PAYMENT_CHANNEL,
             f"🚨 **Withdrawal Request**\n"
@@ -372,11 +358,8 @@ async def text_handler(client, msg):
         await msg.reply("✅ Withdrawal request sent. You will be notified when processed.")
         user_state.pop(uid, None)
 
-    # If user sends text while waiting for screenshot
     elif state == "awaiting_ss":
         await msg.reply("📸 Please send a **photo** (screenshot), not text.")
-
-    # Ignore other random text
     else:
         pass
 

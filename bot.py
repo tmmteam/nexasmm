@@ -42,7 +42,7 @@ def transaction_add_web_balance(uid, amt):
         db.reference(f"users/{uid}/web_balance").transaction(transact)
         return True
     except Exception as e:
-        logger.error(f"Transaction failed: {e}")
+        logger.error(f"Transaction add failed: {e}")
         return False
 
 def transaction_deduct_web_balance(uid, amt):
@@ -54,13 +54,12 @@ def transaction_deduct_web_balance(uid, amt):
         db.reference(f"users/{uid}/web_balance").transaction(transact)
         return True
     except Exception as e:
-        logger.error(f"Transaction failed: {e}")
+        logger.error(f"Transaction deduct failed: {e}")
         return False
 
 # ---------------- BOT INIT ----------------
 app = Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# States
 user_state = {}          # normal users
 pending_payments = {}    # uid -> {amount, admin_msgs, handled, handled_by, user_name}
 admin_state = {}         # admin panel flows
@@ -89,7 +88,6 @@ async def start(client, message):
                     await app.send_message(ref_id, "🎉 New referral! +₹0.25 in your bot balance.")
                     await message.reply(f"✅ You were referred by user {ref_id}")
 
-    # Check if banned
     user = get_user(uid)
     if user and user.get("banned"):
         return await message.reply("⛔ You are banned from using this bot.")
@@ -120,19 +118,17 @@ async def verify(client, cb):
         except:
             return await cb.answer("⚠️ Could not verify. Try again later.", show_alert=True)
 
-    # Welcome image + telegraph link
     try:
         await cb.message.reply_photo(
             photo=WELCOME_IMAGE,
             caption=f"✅ Welcome! You're verified now.\n\n📖 Full guide & info: {TELEGRAPH_URL}",
             reply_markup=main_menu(uid)
         )
-        await cb.message.delete()  # old join message remove
+        await cb.message.delete()
     except:
-        # fallback
         await cb.message.edit("✅ Verified! Welcome to the bot.", reply_markup=main_menu(uid))
 
-# ---------------- MAIN MENU (with admin button if admin) ----------------
+# ---------------- MAIN MENU ----------------
 def main_menu(uid):
     buttons = [
         [InlineKeyboardButton("🚀 SMM Services", web_app=WebAppInfo(url=WEB_URL)),
@@ -148,7 +144,7 @@ def main_menu(uid):
         buttons.append([InlineKeyboardButton("🛡 Admin Panel", callback_data="admin_panel")])
     return InlineKeyboardMarkup(buttons)
 
-# ---------------- CALLBACK HANDLERS (menu buttons) ----------------
+# ---------------- MENU CALLBACKS ----------------
 @app.on_callback_query(filters.regex("add"))
 async def add_fund_start(client, cb):
     uid = cb.from_user.id
@@ -180,7 +176,7 @@ async def withdraw_start(client, cb):
     if user and user.get("banned"):
         return await cb.answer("You are banned!", show_alert=True)
     user_state[uid] = "wd"
-    await cb.message.reply("💸 Enter the amount you want to withdraw (min ₹2):")
+    await cb.message.reply("💸 Enter amount to withdraw (min ₹2):")
 
 @app.on_callback_query(filters.regex("order"))
 async def order_status(client, cb):
@@ -217,177 +213,58 @@ async def admin_panel(client, cb):
 async def admin_back(client, cb):
     await cb.message.edit("✅ Main Menu", reply_markup=main_menu(cb.from_user.id))
 
-# Admin: User list
 @app.on_callback_query(filters.regex("admin_userlist"))
 async def admin_userlist(client, cb):
-    if cb.from_user.id not in ADMIN_IDS: return await cb.answer("⛔", show_alert=True)
+    if cb.from_user.id not in ADMIN_IDS: return await cb.answer("⛔")
     users_ref = db.reference("users").get()
     if not users_ref:
-        await cb.message.reply("No users found.")
-        return
+        return await cb.message.reply("No users found.")
     lines = []
     for uid, data in users_ref.items():
         lines.append(f"UID: {uid} | Bot: ₹{data.get('bot_balance',0)} | Web: ₹{data.get('web_balance',0)} | Refs: {data.get('referrals',0)} | Banned: {data.get('banned',False)}")
     text = "\n".join(lines)
     if len(text) > 4000:
-        filename = "userlist.txt"
-        with open(filename, "w") as f:
+        with open("userlist.txt", "w") as f:
             f.write(text)
-        await cb.message.reply_document(filename, caption="📄 User List")
-        os.remove(filename)
+        await cb.message.reply_document("userlist.txt", caption="📄 User List")
+        os.remove("userlist.txt")
     else:
         await cb.message.reply(f"**User List:**\n{text}")
 
-# Admin: Bot logs
 @app.on_callback_query(filters.regex("admin_logs"))
 async def admin_logs(client, cb):
-    if cb.from_user.id not in ADMIN_IDS: return await cb.answer("⛔", show_alert=True)
+    if cb.from_user.id not in ADMIN_IDS: return await cb.answer("⛔")
     try:
         await cb.message.reply_document(LOG_FILE, caption="📋 Bot Logs")
     except:
         await cb.message.reply("Log file not found.")
 
-# Admin: Add Funds (manual)
+# ---------------- ADMIN OPERATIONS (single-line input) ----------------
 @app.on_callback_query(filters.regex("admin_addfunds"))
 async def admin_addfunds_start(client, cb):
-    if cb.from_user.id not in ADMIN_IDS: return await cb.answer("⛔", show_alert=True)
-    admin_state[cb.from_user.id] = {"action": "addfunds_uid"}
-    await cb.message.reply("Enter user ID:")
+    if cb.from_user.id not in ADMIN_IDS: return await cb.answer("⛔")
+    admin_state[cb.from_user.id] = {"action": "addfunds_input"}
+    await cb.message.reply("✍️ Enter `user_id amount` (e.g. `9389373 50`):")
 
-# Admin: Deduct Funds
 @app.on_callback_query(filters.regex("admin_deduct"))
 async def admin_deduct_start(client, cb):
-    if cb.from_user.id not in ADMIN_IDS: return await cb.answer("⛔", show_alert=True)
-    admin_state[cb.from_user.id] = {"action": "deduct_uid"}
-    await cb.message.reply("Enter user ID:")
+    if cb.from_user.id not in ADMIN_IDS: return await cb.answer("⛔")
+    admin_state[cb.from_user.id] = {"action": "deduct_input"}
+    await cb.message.reply("✍️ Enter `user_id amount` to deduct:")
 
-# Admin: Ban
 @app.on_callback_query(filters.regex("admin_ban"))
 async def admin_ban_start(client, cb):
-    if cb.from_user.id not in ADMIN_IDS: return await cb.answer("⛔", show_alert=True)
-    admin_state[cb.from_user.id] = {"action": "ban_uid"}
-    await cb.message.reply("Enter user ID to ban:")
+    if cb.from_user.id not in ADMIN_IDS: return await cb.answer("⛔")
+    admin_state[cb.from_user.id] = {"action": "ban_input"}
+    await cb.message.reply("✍️ Enter user ID to ban:")
 
-# Admin: Unban
 @app.on_callback_query(filters.regex("admin_unban"))
 async def admin_unban_start(client, cb):
-    if cb.from_user.id not in ADMIN_IDS: return await cb.answer("⛔", show_alert=True)
-    admin_state[cb.from_user.id] = {"action": "unban_uid"}
-    await cb.message.reply("Enter user ID to unban:")
+    if cb.from_user.id not in ADMIN_IDS: return await cb.answer("⛔")
+    admin_state[cb.from_user.id] = {"action": "unban_input"}
+    await cb.message.reply("✍️ Enter user ID to unban:")
 
-# ---------------- HANDLE ADMIN TEXT INPUTS (two-step flows) ----------------
-@app.on_message(filters.text & filters.user(ADMIN_IDS))
-async def admin_text_handler(client, msg):
-    admin_id = msg.from_user.id
-    state = admin_state.get(admin_id)
-
-    # Ignore if admin is also in user_state (e.g., payment flow) but admin text handler catches first because of user filter? 
-    # Actually admins are also users, but the order of handlers matters. We have separate admin text handler for admin-specific flows. 
-    # We'll manage by checking state only for admin actions.
-    if not state:
-        return  # not in admin panel flow, could be user text (like add fund) -> ignore here
-
-    action = state.get("action")
-    if action == "addfunds_uid":
-        try:
-            uid = int(msg.text)
-        except:
-            return await msg.reply("Invalid user ID. Enter numeric ID.")
-        state["user_id"] = uid
-        state["action"] = "addfunds_amount"
-        await msg.reply(f"User ID: {uid}\nNow enter amount to add:")
-        return
-
-    if action == "addfunds_amount":
-        try:
-            amt = float(msg.text)
-        except:
-            return await msg.reply("Invalid amount.")
-        uid = state["user_id"]
-        user = get_user(uid)
-        if not user:
-            del admin_state[admin_id]
-            return await msg.reply("User not found.")
-        # Transaction add
-        if transaction_add_web_balance(uid, amt):
-            try:
-                await app.send_message(uid, f"✅ Admin added ₹{amt} to your Web Balance.")
-            except:
-                pass
-            await msg.reply(f"✅ ₹{amt} added to user {uid}.")
-        else:
-            await msg.reply("❌ Failed to update balance.")
-        del admin_state[admin_id]
-        return
-
-    if action == "deduct_uid":
-        try:
-            uid = int(msg.text)
-        except:
-            return await msg.reply("Invalid user ID.")
-        state["user_id"] = uid
-        state["action"] = "deduct_amount"
-        await msg.reply(f"User ID: {uid}\nNow enter amount to deduct:")
-        return
-
-    if action == "deduct_amount":
-        try:
-            amt = float(msg.text)
-        except:
-            return await msg.reply("Invalid amount.")
-        uid = state["user_id"]
-        user = get_user(uid)
-        if not user:
-            del admin_state[admin_id]
-            return await msg.reply("User not found.")
-        if user.get("web_balance", 0) < amt:
-            return await msg.reply("❌ Insufficient web balance.")
-        if transaction_deduct_web_balance(uid, amt):
-            try:
-                await app.send_message(uid, f"⚠️ Admin deducted ₹{amt} from your Web Balance.")
-            except:
-                pass
-            await msg.reply(f"✅ ₹{amt} deducted from user {uid}.")
-        else:
-            await msg.reply("❌ Failed to deduct (maybe balance too low).")
-        del admin_state[admin_id]
-        return
-
-    if action == "ban_uid":
-        try:
-            uid = int(msg.text)
-        except:
-            return await msg.reply("Invalid user ID.")
-        user = get_user(uid)
-        if not user:
-            return await msg.reply("User not found.")
-        update_user(uid, {"banned": True})
-        # Send ban message to user with admin DM links
-        try:
-            dm_buttons = []
-            for adm in ADMIN_IDS:
-                dm_buttons.append(InlineKeyboardButton(f"📩 Admin {adm}", url=f"tg://user?id={adm}"))
-            await app.send_message(uid,
-                "⛔ You have been banned from using this bot.\nContact admins:",
-                reply_markup=InlineKeyboardMarkup([dm_buttons])
-            )
-        except:
-            pass
-        await msg.reply(f"✅ User {uid} banned.")
-        del admin_state[admin_id]
-        return
-
-    if action == "unban_uid":
-        try:
-            uid = int(msg.text)
-        except:
-            return await msg.reply("Invalid user ID.")
-        update_user(uid, {"banned": False})
-        await msg.reply(f"✅ User {uid} unbanned.")
-        del admin_state[admin_id]
-        return
-
-# ---------------- ADD FUND: USER QR & SCREENSHOT FLOW (existing) ----------------
+# ---------------- ADD FUND: DONE / CANCEL buttons after QR ----------------
 @app.on_callback_query(filters.regex(r"pay_done_(\d+)"))
 async def pay_done(client, cb):
     uid = int(cb.matches[0].group(1))
@@ -395,7 +272,7 @@ async def pay_done(client, cb):
         return await cb.answer("⛔ This is not for you.", show_alert=True)
     user_state[uid] = "awaiting_ss"
     await cb.message.delete()
-    await app.send_message(uid, "📸 Please send a screenshot of your successful payment.")
+    await app.send_message(uid, "📸 Send a screenshot of your successful payment.")
 
 @app.on_callback_query(filters.regex(r"pay_cancel_(\d+)"))
 async def pay_cancel(client, cb):
@@ -406,6 +283,7 @@ async def pay_cancel(client, cb):
     await cb.message.delete()
     await app.send_message(uid, "❌ Payment cancelled.")
 
+# ---------------- SCREENSHOT HANDLER -> admins DM ----------------
 @app.on_message(filters.photo)
 async def handle_screenshot(client, msg):
     uid = msg.from_user.id
@@ -456,7 +334,7 @@ async def handle_screenshot(client, msg):
 
 # ---------------- ADMIN PAYMENT APPROVAL / REJECTION ----------------
 @app.on_callback_query(filters.regex(r"accept_(\d+)"))
-async def admin_accept(client, cb):
+async def accept_payment(client, cb):
     if cb.from_user.id not in ADMIN_IDS: return await cb.answer("⛔", show_alert=True)
     uid = int(cb.matches[0].group(1))
     payment = pending_payments.get(uid)
@@ -470,7 +348,7 @@ async def admin_accept(client, cb):
     await app.send_message(cb.from_user.id, f"✍️ Enter the exact amount paid by user {uid}:")
 
 @app.on_callback_query(filters.regex(r"reject_(\d+)"))
-async def admin_reject(client, cb):
+async def reject_payment(client, cb):
     if cb.from_user.id not in ADMIN_IDS: return await cb.answer("⛔", show_alert=True)
     uid = int(cb.matches[0].group(1))
     payment = pending_payments.get(uid)
@@ -478,7 +356,6 @@ async def admin_reject(client, cb):
         return await cb.answer("⚠️ Already handled.", show_alert=True)
 
     payment["handled"] = True
-    payment["handled_by"] = cb.from_user.id
     for admin_id, msg_id in payment.get("admin_msgs", {}).items():
         try:
             await app.edit_message_caption(admin_id, msg_id,
@@ -489,31 +366,19 @@ async def admin_reject(client, cb):
     pending_payments.pop(uid, None)
     await cb.answer("Rejected!")
 
-# ---------------- ADMIN AMOUNT INPUT AFTER ACCEPT (for payment) ----------------
+# ---------------- UNIFIED ADMIN TEXT HANDLER (payment + operations) ----------------
 @app.on_message(filters.text & filters.user(ADMIN_IDS))
-async def admin_amount_input(client, msg):
-    admin_id = msg.from_user.id
-    state = admin_state.get(admin_id)
-    if not state or state["action"] != "accept_amount":
-        return  # let other admin_text_handler handle it, but this filter already fired. We'll check.
-    # This handler might clash with the previous admin_text_handler. We'll merge them.
-    # We'll move this logic into the main admin_text_handler with additional check.
-    pass  # We'll handle inside admin_text_handler below (modified)
-
-# We'll combine both admin text handlers into one with a clear flow.
-# Let's rewrite a single unified admin handler.
-
-@app.on_message(filters.text & filters.user(ADMIN_IDS))
-async def unified_admin_text_handler(client, msg):
+async def admin_text_handler(client, msg):
     admin_id = msg.from_user.id
     state = admin_state.get(admin_id)
 
     if not state:
-        return
+        # No admin panel flow, let normal user handlers process (e.g. admin adding own funds)
+        return await msg.continue_propagation()
 
-    action = state.get("action")
+    action = state["action"]
 
-    # Payment accept amount entry
+    # --- Payment accept amount entry ---
     if action == "accept_amount":
         uid = state["user_id"]
         payment = pending_payments.get(uid)
@@ -523,12 +388,13 @@ async def unified_admin_text_handler(client, msg):
         try:
             amt = float(msg.text)
         except:
-            return await msg.reply("❌ Invalid amount. Please enter a number.")
+            return await msg.reply("❌ Invalid amount. Enter a number.")
 
-        # Update balance with transaction
+        # Add to web balance via transaction
         if not transaction_add_web_balance(uid, amt):
             return await msg.reply("❌ Transaction failed. Try again.")
 
+        # Edit all admin DMs
         for admin_id_iter, msg_id_iter in payment.get("admin_msgs", {}).items():
             try:
                 await app.edit_message_caption(admin_id_iter, msg_id_iter,
@@ -536,39 +402,34 @@ async def unified_admin_text_handler(client, msg):
                 await app.edit_message_reply_markup(admin_id_iter, msg_id_iter, reply_markup=None)
             except: pass
 
+        # Log to payment channel
         try:
             await app.send_message(PAYMENT_CHANNEL,
                 f"✅ **Payment Verified**\n👤 User: {payment['user_name']} ({uid})\n💵 Amount: ₹{amt}")
         except Exception as e:
             logger.error(f"Channel post failed: {e}")
 
+        # Notify user
         await app.send_message(uid, f"✅ Your payment of ₹{amt} has been approved!\nFunds added to your Web Balance.")
 
+        # Clean up
         pending_payments.pop(uid, None)
         admin_state.pop(admin_id, None)
         await msg.reply("✅ Done.")
         return
 
-    # Admin fund operations (add/deduct/ban/unban)
-    if action == "addfunds_uid":
+    # --- Manual add funds (single-line) ---
+    elif action == "addfunds_input":
+        parts = msg.text.strip().split()
+        if len(parts) != 2:
+            return await msg.reply("❌ Format: `user_id amount` (e.g. `12345 50`)")
         try:
-            uid = int(msg.text)
+            uid = int(parts[0])
+            amt = float(parts[1])
         except:
-            return await msg.reply("Invalid user ID.")
-        state["user_id"] = uid
-        state["action"] = "addfunds_amount"
-        await msg.reply(f"User ID: {uid}\nNow enter amount to add:")
-        return
-
-    if action == "addfunds_amount":
-        try:
-            amt = float(msg.text)
-        except:
-            return await msg.reply("Invalid amount.")
-        uid = state["user_id"]
+            return await msg.reply("❌ Invalid numbers.")
         user = get_user(uid)
         if not user:
-            del admin_state[admin_id]
             return await msg.reply("User not found.")
         if transaction_add_web_balance(uid, amt):
             try:
@@ -576,32 +437,25 @@ async def unified_admin_text_handler(client, msg):
             except: pass
             await msg.reply(f"✅ ₹{amt} added to user {uid}.")
         else:
-            await msg.reply("❌ Failed to update balance.")
+            await msg.reply("❌ Failed to add funds.")
         del admin_state[admin_id]
         return
 
-    if action == "deduct_uid":
+    # --- Manual deduct funds (single-line) ---
+    elif action == "deduct_input":
+        parts = msg.text.strip().split()
+        if len(parts) != 2:
+            return await msg.reply("❌ Format: `user_id amount`")
         try:
-            uid = int(msg.text)
+            uid = int(parts[0])
+            amt = float(parts[1])
         except:
-            return await msg.reply("Invalid user ID.")
-        state["user_id"] = uid
-        state["action"] = "deduct_amount"
-        await msg.reply(f"User ID: {uid}\nNow enter amount to deduct:")
-        return
-
-    if action == "deduct_amount":
-        try:
-            amt = float(msg.text)
-        except:
-            return await msg.reply("Invalid amount.")
-        uid = state["user_id"]
+            return await msg.reply("❌ Invalid numbers.")
         user = get_user(uid)
         if not user:
-            del admin_state[admin_id]
             return await msg.reply("User not found.")
         if user.get("web_balance", 0) < amt:
-            return await msg.reply("❌ Insufficient web balance.")
+            return await msg.reply("❌ Insufficient balance.")
         if transaction_deduct_web_balance(uid, amt):
             try:
                 await app.send_message(uid, f"⚠️ Admin deducted ₹{amt} from your Web Balance.")
@@ -612,11 +466,12 @@ async def unified_admin_text_handler(client, msg):
         del admin_state[admin_id]
         return
 
-    if action == "ban_uid":
+    # --- Ban user ---
+    elif action == "ban_input":
         try:
-            uid = int(msg.text)
+            uid = int(msg.text.strip())
         except:
-            return await msg.reply("Invalid user ID.")
+            return await msg.reply("❌ Invalid user ID.")
         user = get_user(uid)
         if not user:
             return await msg.reply("User not found.")
@@ -633,22 +488,25 @@ async def unified_admin_text_handler(client, msg):
         del admin_state[admin_id]
         return
 
-    if action == "unban_uid":
+    # --- Unban user ---
+    elif action == "unban_input":
         try:
-            uid = int(msg.text)
+            uid = int(msg.text.strip())
         except:
-            return await msg.reply("Invalid user ID.")
+            return await msg.reply("❌ Invalid user ID.")
         update_user(uid, {"banned": False})
         await msg.reply(f"✅ User {uid} unbanned.")
         del admin_state[admin_id]
         return
 
+    else:
+        # Unknown state, ignore
+        pass
+
 # ---------------- USER TEXT HANDLER (add amount, withdraw) ----------------
 @app.on_message(filters.text)
 async def user_text_handler(client, msg):
     uid = msg.from_user.id
-    # Bypass if admin and already handled by admin handler? But admin handler runs first due to user filter. 
-    # However, this handler will still catch admin texts if admin_state not set, but that's fine – admins can use normal user flows.
     user = get_user(uid)
     if user and user.get("banned"):
         return await msg.reply("⛔ You are banned. Contact admin.")
@@ -686,9 +544,9 @@ async def user_text_handler(client, msg):
             amt = float(msg.text)
         except:
             return await msg.reply("❌ Invalid amount.")
-        user = get_user(uid)
         if amt < 2:
             return await msg.reply("❌ Minimum withdrawal is ₹2.")
+        user = get_user(uid)
         if user["bot_balance"] < amt:
             return await msg.reply("❌ Insufficient bot balance.")
         await app.send_message(PAYMENT_CHANNEL,
@@ -698,9 +556,6 @@ async def user_text_handler(client, msg):
 
     elif state == "awaiting_ss":
         await msg.reply("📸 Please send a **photo** (screenshot), not text.")
-
-    else:
-        pass
 
 # ---------------- RUN ----------------
 app.run()

@@ -22,14 +22,14 @@ firebase_admin.initialize_app(cred, {'databaseURL': DB_URL})
 
 def get_user(uid):
     try:
-        return db.reference(f"users/{uid}").get()
+        return db.reference(f"nexa/users/{uid}").get()
     except Exception as e:
         logger.error(f"get_user failed for {uid}: {e}")
         return None
 
 def update_user(uid, data):
     try:
-        db.reference(f"users/{uid}").update(data)
+        db.reference(f"nexa/users/{uid}").update(data)
     except Exception as e:
         logger.error(f"update_user failed for {uid}: {e}")
 
@@ -39,7 +39,7 @@ def transaction_add_web_balance(uid, amt):
             return amt
         return current + amt
     try:
-        db.reference(f"users/{uid}/web_balance").transaction(transact)
+        db.reference(f"nexa/users/{uid}/web_balance").transaction(transact)
         return True
     except Exception as e:
         logger.error(f"Transaction add failed: {e}")
@@ -51,7 +51,7 @@ def transaction_deduct_web_balance(uid, amt):
             raise ValueError("Insufficient balance")
         return current - amt
     try:
-        db.reference(f"users/{uid}/web_balance").transaction(transact)
+        db.reference(f"nexa/users/{uid}/web_balance").transaction(transact)
         return True
     except Exception as e:
         logger.error(f"Transaction deduct failed: {e}")

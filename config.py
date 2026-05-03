@@ -1,18 +1,40 @@
-API_ID = 12345
-API_HASH = "your_hash"
-BOT_TOKEN = "your_token"
+# config.py
 
-ADMIN_ID = 5311223486
+# ===================== TELEGRAM BOT =====================
+API_ID = 12345678                     # my.telegram.org se API ID
+API_HASH = "your_api_hash_here"      # API hash
+BOT_TOKEN = "123456:ABC-DEF1234gh"   # @BotFather se token
 
-CHANNELS = ["@FROZENTOOLS", "@Teamsanki", "@Tmm_smm_world"]
-PRIVATE_CHANNEL = "https://t.me/xxxx"
+# ===================== FIREBASE =====================
+DB_URL = "https://your-project.firebaseio.com"  # Realtime Database URL
 
+# ===================== CHANNELS (Verification) =====================
+# Username @ ke saath (e.g., "@nexachannel1")
+CHANNELS = [
+    "@channel1",  # Join Channel 1
+    "@channel2",  # Join Channel 2
+    "@channel3",  # Join Channel 3
+]
 
-DB_URL = "https://nexasmm-default-rtdb.firebaseio.com"
+PRIVATE_CHANNEL = "https://t.me/+abcdefg"  # Private group/channel join link
 
-UPI_ID = "yourupi@upi"
-UPI_NAME = "Ayush"
+# ===================== PAYMENT =====================
+UPI_ID = "youremail@upi"    # UPI ID (e.g., "example@axl")
+UPI_NAME = "Your Name"      # UPI display name
 
-PAYMENT_CHANNEL = "@NEXASEXAPRO"
+# Payment approval logs yahan jaayenge (channel/group numeric ID)
+# Negative for supergroups/channels
+PAYMENT_CHANNEL = -1001234567890
 
-WEB_URL = "https://your-site.com"
+# ===================== WEBAPP =====================
+WEB_URL = "https://your-frontend-url.vercel.app"  # Mini App URL
+
+# ===================== ADMINS =====================
+ADMIN_IDS = [7549407961, 5311223486]  # Admin Telegram user IDs
+
+# ===================== WELCOME =====================
+WELCOME_IMAGE = "welcome.jpg"  # Bot folder mein yeh image rakhna
+TELEGRAPH_URL = "https://telegra.ph/Your-Guide-04-26"
+
+# ===================== LOGS =====================
+LOG_FILE = "bot.log"  # Bot logs yahan save honge

@@ -32,7 +32,8 @@ for ch in CHANNELS:
         logger.error(f"CHANNEL entry '{ch}' does not start with '@'")
         sys.exit(1)
 
-required_vars = ['API_ID', 'API_HASH', 'BOT_TOKEN', 'DB_URL', 'WELCOME_IMAGE', 'TELEGRAPH_URL', 'UPI_ID', 'UPI_NAME', 'ADMIN_IDS', 'PAYMENT_CHANNEL']
+# WELCOME_IMAGE ab required nahi
+required_vars = ['API_ID', 'API_HASH', 'BOT_TOKEN', 'DB_URL', 'TELEGRAPH_URL', 'UPI_ID', 'UPI_NAME', 'ADMIN_IDS', 'PAYMENT_CHANNEL']
 for var in required_vars:
     if var not in dir():
         logger.error(f"Missing config variable: {var}")
@@ -147,7 +148,7 @@ async def start(client, message):
         logger.error(f"Error in start handler for {uid}: {e}", exc_info=True)
         await message.reply("❌ An internal error occurred. Please try again later.")
 
-# ---------------- VERIFY ----------------
+# ---------------- VERIFY (NO IMAGE) ----------------
 @app.on_callback_query(filters.regex("verify"))
 async def verify(client, cb):
     uid = cb.from_user.id
@@ -164,23 +165,12 @@ async def verify(client, cb):
         except:
             return await cb.answer("⚠️ Could not verify. Try again later.", show_alert=True)
 
-    try:
-        # If WELCOME_IMAGE is a local file that doesn't exist, fallback to a text message
-        await cb.message.reply_photo(
-            photo=WELCOME_IMAGE,
-            caption=f"✅ **Welcome! You're verified now.**\n\n📖 Full guide & info: {TELEGRAPH_URL}",
-            reply_markup=main_menu(uid),
-            parse_mode="markdown"
-        )
-        await cb.message.delete()
-    except Exception as e:
-        logger.error(f"Verify photo error: {e}")
-        # Fallback: just send the caption as text
-        await cb.message.edit(
-            f"✅ **Welcome! You're verified now.**\n\n📖 Full guide & info: {TELEGRAPH_URL}",
-            reply_markup=main_menu(uid),
-            parse_mode="markdown"
-        )
+    # Direct welcome text, no photo
+    await cb.message.reply(
+        f"✅ Welcome! You're verified now.\n\n📖 Full guide & info: {TELEGRAPH_URL}",
+        reply_markup=main_menu(uid)
+    )
+    await cb.message.delete()
 
 # ---------------- MAIN MENU ----------------
 def main_menu(uid):
@@ -326,7 +316,7 @@ async def admin_unban_start(client, cb):
     admin_state[cb.from_user.id] = {"action": "unban_input"}
     await cb.message.reply("✍️ **Enter user ID to unban:**", parse_mode="markdown")
 
-# ---------------- ADD FUND QR FLOW ----------------
+# ---------------- ADD FUND QR / PAYMENT FLOW ----------------
 @app.on_callback_query(filters.regex(r"pay_done_(\d+)"))
 async def pay_done(client, cb):
     uid = int(cb.matches[0].group(1))
@@ -345,7 +335,6 @@ async def pay_cancel(client, cb):
     await cb.message.delete()
     await app.send_message(uid, "❌ Payment cancelled.", parse_mode="markdown")
 
-# ---------------- SCREENSHOT HANDLER ----------------
 @app.on_message(filters.photo)
 async def handle_screenshot(client, msg):
     uid = msg.from_user.id
@@ -394,7 +383,6 @@ async def handle_screenshot(client, msg):
     await msg.reply("⏳ Your payment is being verified. We'll update you shortly.", parse_mode="markdown")
     user_state.pop(uid, None)
 
-# ---------------- ADMIN ACCEPT / REJECT ----------------
 @app.on_callback_query(filters.regex(r"accept_(\d+)"))
 async def accept_payment(client, cb):
     if cb.from_user.id not in ADMIN_IDS: return await cb.answer("⛔", show_alert=True)
@@ -429,7 +417,6 @@ async def reject_payment(client, cb):
     pending_payments.pop(uid, None)
     await cb.answer("Rejected!")
 
-# ---------------- ADMIN TEXT HANDLER ----------------
 @app.on_message(filters.text & filters.user(ADMIN_IDS))
 async def admin_text_handler(client, msg):
     admin_id = msg.from_user.id
@@ -559,7 +546,7 @@ async def admin_text_handler(client, msg):
     else:
         pass
 
-# ---------------- USER TEXT HANDLER ----------------
+# ---------------- USER TEXT HANDLER (add amount, withdraw) ----------------
 @app.on_message(filters.text)
 async def user_text_handler(client, msg):
     uid = msg.from_user.id

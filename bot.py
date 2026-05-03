@@ -1,4 +1,5 @@
 import os
+import sys
 import logging
 import qrcode
 import firebase_admin
@@ -8,17 +9,49 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInf
 
 from config import *
 
-# ---------------- LOGGING SETUP ----------------
-logging.basicConfig(
-    filename=LOG_FILE,
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
+# ---------------- LOGGING SETUP (Console + File) ----------------
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# File handler
+file_handler = logging.FileHandler(LOG_FILE)
+file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+logger.addHandler(file_handler)
+
+# Console handler (to see errors in terminal)
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+logger.addHandler(console_handler)
+
+logger.info("Bot starting...")
+
+# ---------------- CONFIG VALIDATION ----------------
+# Ensure critical variables exist
+if not hasattr(sys.modules[__name__], 'CHANNELS') or len(CHANNELS) < 3:
+    logger.error("CHANNELS must have at least 3 entries!")
+    sys.exit(1)
+for ch in CHANNELS:
+    if not ch.startswith('@'):
+        logger.error(f"CHANNEL entry '{ch}' does not start with '@'")
+        sys.exit(1)
+
+# Other basic checks
+required_vars = ['API_ID', 'API_HASH', 'BOT_TOKEN', 'DB_URL', 'WELCOME_IMAGE', 'TELEGRAPH_URL', 'UPI_ID', 'UPI_NAME', 'ADMIN_IDS', 'PAYMENT_CHANNEL']
+for var in required_vars:
+    if var not in dir():
+        logger.error(f"Missing config variable: {var}")
+        sys.exit(1)
+
+logger.info("Config validation passed.")
 
 # ---------------- FIREBASE SETUP ----------------
-cred = credentials.Certificate("serviceAccountKey.json")
-firebase_admin.initialize_app(cred, {'databaseURL': DB_URL})
+try:
+    cred = credentials.Certificate("serviceAccountKey.json")
+    firebase_admin.initialize_app(cred, {'databaseURL': DB_URL})
+    logger.info("Firebase initialized.")
+except Exception as e:
+    logger.error(f"Firebase init failed: {e}")
+    sys.exit(1)
 
 def get_user(uid):
     try:
@@ -64,43 +97,60 @@ user_state = {}          # normal users
 pending_payments = {}    # uid -> {amount, admin_msgs, handled, handled_by, user_name}
 admin_state = {}         # admin panel flows
 
+# ---------------- TEST PING COMMAND ----------------
+@app.on_message(filters.command("ping"))
+async def ping(client, message):
+    await message.reply("🏓 Pong! Bot is alive.")
+    logger.info(f"Ping from {message.from_user.id}")
+
 # ---------------- START (force join) ----------------
 @app.on_message(filters.command("start"))
 async def start(client, message):
     uid = message.from_user.id
-    args = message.text.split()
+    logger.info(f"/start from {uid}")
 
-    if not get_user(uid):
-        update_user(uid, {
-            "bot_balance": 0,
-            "web_balance": 0,
-            "referrals": 0,
-            "banned": False
-        })
+    try:
+        args = message.text.split()
 
-        if len(args) > 1 and args[1].startswith("ref_"):
-            ref_id = int(args[1].split("_")[1])
-            if ref_id != uid:
-                ref_user = get_user(ref_id)
-                if ref_user:
-                    # Use nexa/users path consistently
-                    db.reference(f"nexa/users/{ref_id}/bot_balance").set(ref_user["bot_balance"] + 0.25)
-                    db.reference(f"nexa/users/{ref_id}/referrals").set(ref_user["referrals"] + 1)
-                    await app.send_message(ref_id, "🎉 New referral! +₹0.25 in your bot balance.")
-                    await message.reply(f"✅ You were referred by user {ref_id}", parse_mode="Markdown")
+        if not get_user(uid):
+            update_user(uid, {
+                "bot_balance": 0,
+                "web_balance": 0,
+                "referrals": 0,
+                "banned": False
+            })
 
-    user = get_user(uid)
-    if user and user.get("banned"):
-        return await message.reply("⛔ You are banned from using this bot.")
+            if len(args) > 1 and args[1].startswith("ref_"):
+                ref_id = int(args[1].split("_")[1])
+                if ref_id != uid:
+                    ref_user = get_user(ref_id)
+                    if ref_user:
+                        db.reference(f"nexa/users/{ref_id}/bot_balance").set(ref_user["bot_balance"] + 0.25)
+                        db.reference(f"nexa/users/{ref_id}/referrals").set(ref_user["referrals"] + 1)
+                        await app.send_message(ref_id, "🎉 New referral! +₹0.25 in your bot balance.")
+                        await message.reply(f"✅ You were referred by user {ref_id}")
 
-    join_buttons = [
-        [InlineKeyboardButton("📢 Join Channel 1", url=f"https://t.me/{CHANNELS[0][1:]}")],
-        [InlineKeyboardButton("📢 Join Channel 2", url=f"https://t.me/{CHANNELS[1][1:]}")],
-        [InlineKeyboardButton("📢 Join Channel 3", url=f"https://t.me/{CHANNELS[2][1:]}")],
-        [InlineKeyboardButton("🔒 Private Group", url=PRIVATE_CHANNEL)],
-        [InlineKeyboardButton("✅ Verify & Start", callback_data="verify")]
-    ]
-    await message.reply("⚠️ Please join all channels first.", reply_markup=InlineKeyboardMarkup(join_buttons), parse_mode="Markdown")
+        user = get_user(uid)
+        if user and user.get("banned"):
+            return await message.reply("⛔ You are banned from using this bot.")
+
+        # Build join buttons safely
+        join_buttons = [
+            [InlineKeyboardButton("📢 Join Channel 1", url=f"https://t.me/{CHANNELS[0][1:]}")],
+            [InlineKeyboardButton("📢 Join Channel 2", url=f"https://t.me/{CHANNELS[1][1:]}")],
+            [InlineKeyboardButton("📢 Join Channel 3", url=f"https://t.me/{CHANNELS[2][1:]}")],
+            [InlineKeyboardButton("🔒 Private Group", url=PRIVATE_CHANNEL)],
+            [InlineKeyboardButton("✅ Verify & Start", callback_data="verify")]
+        ]
+        await message.reply(
+            "⚠️ Please join all channels first.",
+            reply_markup=InlineKeyboardMarkup(join_buttons)
+        )
+        logger.info(f"/start handled for {uid}")
+
+    except Exception as e:
+        logger.error(f"Error in start handler for {uid}: {e}", exc_info=True)
+        await message.reply("❌ An internal error occurred. Please try again later.")
 
 # ---------------- VERIFY ----------------
 @app.on_callback_query(filters.regex("verify"))
@@ -121,14 +171,15 @@ async def verify(client, cb):
 
     try:
         await cb.message.reply_photo(
-            photo=WELCOME_IMAGE,  # use a permanent Telegraph image URL for premium feel
+            photo=WELCOME_IMAGE,
             caption=f"✅ **Welcome! You're verified now.**\n\n📖 Full guide & info: {TELEGRAPH_URL}",
             reply_markup=main_menu(uid),
             parse_mode="Markdown"
         )
         await cb.message.delete()
-    except:
-        await cb.message.edit("✅ Verified! Welcome to the bot.", reply_markup=main_menu(uid), parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Verify error for {uid}: {e}")
+        await cb.message.edit("✅ Verified! Welcome to the bot.", reply_markup=main_menu(uid))
 
 # ---------------- MAIN MENU ----------------
 def main_menu(uid):
@@ -225,7 +276,7 @@ async def admin_back(client, cb):
 @app.on_callback_query(filters.regex("admin_userlist"))
 async def admin_userlist(client, cb):
     if cb.from_user.id not in ADMIN_IDS: return await cb.answer("⛔")
-    users_ref = db.reference("nexa/users").get()  # fixed
+    users_ref = db.reference("nexa/users").get()
     if not users_ref:
         return await cb.message.reply("No users found.")
     lines = []
@@ -235,7 +286,7 @@ async def admin_userlist(client, cb):
     if len(text) > 4000:
         with open("userlist.txt", "w") as f:
             f.write(text)
-        await cb.message.reply_document("userlist.txt", caption="📄 User List", parse_mode="Markdown")
+        await cb.message.reply_document("userlist.txt", caption="📄 User List")
         os.remove("userlist.txt")
     else:
         await cb.message.reply(f"**User List:**\n{text}", parse_mode="Markdown")
@@ -244,7 +295,7 @@ async def admin_userlist(client, cb):
 async def admin_logs(client, cb):
     if cb.from_user.id not in ADMIN_IDS: return await cb.answer("⛔")
     try:
-        await cb.message.reply_document(LOG_FILE, caption="📋 Bot Logs", parse_mode="Markdown")
+        await cb.message.reply_document(LOG_FILE, caption="📋 Bot Logs")
     except:
         await cb.message.reply("Log file not found.", parse_mode="Markdown")
 
@@ -367,7 +418,6 @@ async def reject_payment(client, cb):
     payment["handled"] = True
     for admin_id, msg_id in payment.get("admin_msgs", {}).items():
         try:
-            # Markdown may break with existing caption, better to keep original but we'll just update
             await app.edit_message_caption(admin_id, msg_id,
                 caption=cb.message.caption.markdown + "\n\n❌ **Rejected by admin**",
                 parse_mode="Markdown")
@@ -384,7 +434,6 @@ async def admin_text_handler(client, msg):
     state = admin_state.get(admin_id)
 
     if not state:
-        # No admin panel flow, let normal user handlers process (e.g. admin adding own funds)
         return await msg.continue_propagation()
 
     action = state["action"]
@@ -401,11 +450,9 @@ async def admin_text_handler(client, msg):
         except:
             return await msg.reply("❌ Invalid amount. Enter a number.", parse_mode="Markdown")
 
-        # Add to web balance via transaction
         if not transaction_add_web_balance(uid, amt):
             return await msg.reply("❌ Transaction failed. Try again.", parse_mode="Markdown")
 
-        # Edit all admin DMs
         for admin_id_iter, msg_id_iter in payment.get("admin_msgs", {}).items():
             try:
                 await app.edit_message_caption(admin_id_iter, msg_id_iter,
@@ -414,7 +461,6 @@ async def admin_text_handler(client, msg):
                 await app.edit_message_reply_markup(admin_id_iter, msg_id_iter, reply_markup=None)
             except: pass
 
-        # Log to payment channel
         try:
             await app.send_message(PAYMENT_CHANNEL,
                 f"✅ **Payment Verified**\n👤 User: {payment['user_name']} ({uid})\n💵 Amount: ₹{amt}",
@@ -422,18 +468,16 @@ async def admin_text_handler(client, msg):
         except Exception as e:
             logger.error(f"Channel post failed: {e}")
 
-        # Notify user
         await app.send_message(uid,
             f"✅ Your payment of ₹{amt} has been approved!\nFunds added to your Web Balance.",
             parse_mode="Markdown")
 
-        # Clean up
         pending_payments.pop(uid, None)
         admin_state.pop(admin_id, None)
         await msg.reply("✅ Done.", parse_mode="Markdown")
         return
 
-    # --- Manual add funds (single-line) ---
+    # --- Manual add funds ---
     elif action == "addfunds_input":
         parts = msg.text.strip().split()
         if len(parts) != 2:
@@ -456,7 +500,7 @@ async def admin_text_handler(client, msg):
         del admin_state[admin_id]
         return
 
-    # --- Manual deduct funds (single-line) ---
+    # --- Manual deduct ---
     elif action == "deduct_input":
         parts = msg.text.strip().split()
         if len(parts) != 2:
@@ -516,7 +560,6 @@ async def admin_text_handler(client, msg):
         return
 
     else:
-        # Unknown state, ignore
         pass
 
 # ---------------- USER TEXT HANDLER (add amount, withdraw) ----------------
@@ -576,4 +619,5 @@ async def user_text_handler(client, msg):
         await msg.reply("📸 Please send a **photo** (screenshot), not text.", parse_mode="Markdown")
 
 # ---------------- RUN ----------------
+logger.info("Bot is now running.")
 app.run()
